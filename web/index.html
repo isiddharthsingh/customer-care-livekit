@@ -1,0 +1,106 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8"/>
+    <title>Kimber Health Voice</title>
+  </head>
+  <body>
+    <h1>Kimber Health Voice</h1>
+    <div>
+      <button id="join">Join</button>
+      <button id="leave">Leave</button>
+      <button id="recStart">Start Recording</button>
+      <button id="recStop">Stop Recording</button>
+    </div>
+    <pre id="log"></pre>
+    <script type="module">
+      import { Room, RoomEvent, createLocalAudioTrack } from "https://cdn.skypack.dev/livekit-client";
+
+      const log = (m) => { document.getElementById('log').textContent += m + "\n"; };
+      const room = new Room();
+      let egressId = null;
+
+      room.on(RoomEvent.TrackSubscribed, (_t, pub, p) => {
+        if (pub.kind === "audio") {
+          const el = document.createElement("audio");
+          el.autoplay = true;
+          el.srcObject = new MediaStream([pub.track.mediaStreamTrack]);
+          document.body.appendChild(el);
+          log("audio from " + p.identity);
+        }
+      });
+
+      async function join() {
+        const body = { room: "demo", identity: `web_${Date.now()}` };
+        const { access_token, url } = await fetch("http://localhost:8787/token", {
+          method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body)
+        }).then(r => r.json());
+
+        await room.connect(url, access_token);
+        const mic = await createLocalAudioTrack();
+        await room.localParticipant.publishTrack(mic);
+        log("joined");
+
+        // Auto start recording after join
+        try {
+          const r = await fetch("http://localhost:8787/record/start", {
+            method: "POST", headers: {"Content-Type":"application/json"},
+            body: JSON.stringify({ room: "demo", audio_only: true })
+          }).then(r => r.json());
+          egressId = r.egress_id;
+          log("recording started: " + egressId);
+        } catch (e) {
+          log("failed to start recording: " + (e?.message || e));
+        }
+      }
+
+      async function leave() {
+        if (egressId) {
+          await fetch("http://localhost:8787/record/stop", {
+            method: "POST", headers: {"Content-Type":"application/json"},
+            body: JSON.stringify({ egress_id: egressId })
+          });
+          egressId = null;
+          log("stopped recording");
+        }
+        await room.disconnect();
+        log("left");
+      }
+
+      async function recStart() {
+        const r = await fetch("http://localhost:8787/record/start", {
+          method: "POST", headers: {"Content-Type":"application/json"},
+          body: JSON.stringify({ room: "demo", audio_only: true })
+        }).then(r => r.json());
+        egressId = r.egress_id;
+        log("recording started: " + egressId);
+      }
+
+      async function recStop() {
+        if (!egressId) return;
+        await fetch("http://localhost:8787/record/stop", {
+          method: "POST", headers: {"Content-Type":"application/json"},
+          body: JSON.stringify({ egress_id: egressId })
+        });
+        log("recording stopped");
+        egressId = null;
+      }
+
+      document.getElementById("join").onclick = join;
+      document.getElementById("leave").onclick = leave;
+      document.getElementById("recStart").onclick = recStart;
+      document.getElementById("recStop").onclick = recStop;
+
+      // Stop recording if user closes the tab
+      window.addEventListener("beforeunload", async () => {
+        if (!egressId) return;
+        try {
+          await fetch("http://localhost:8787/record/stop", {
+            method: "POST", headers: {"Content-Type":"application/json"},
+            body: JSON.stringify({ egress_id: egressId })
+          });
+        } catch {}
+      });
+    </script>
+  </body>
+</html>

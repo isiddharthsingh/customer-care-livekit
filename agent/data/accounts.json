@@ -1,0 +1,21 @@
+{
+  "KIM1001": {
+    "name": "Anita Sharma",
+    "dob": "1984-05-10"
+  },
+  "KIM2002": {
+    "name": "David Chen",
+    "dob": "1990-09-21"
+  },
+  "KIM3003": {
+    "name": "John Miller",
+    "dob": "1988-02-14"
+  },
+  "KIM4004": {
+    "name": "Siddharth Singh",
+    "dob": "2000-01-27",
+    "pin": "1234",
+    "id": 4
+  }
+  
+}
