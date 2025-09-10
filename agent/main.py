@@ -3,7 +3,7 @@ import json, os, time, re
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
-from collections import deque
+ 
 
 from dotenv import load_dotenv
 
@@ -200,21 +200,7 @@ def strong_lang_signal(text: str) -> str:
 
 async def entrypoint(ctx: JobContext):
     ELEVEN_API_KEY = os.getenv("ELEVEN_API_KEY")
-
-    VOICE_MAP = {
-        "en": os.getenv("ELEVEN_VOICE_EN"),
-        "hi": os.getenv("ELEVEN_VOICE_HI"),
-        "zh": os.getenv("ELEVEN_VOICE_ZH"),
-    }
-    ALLOWED = {"en", "hi", "zh"}
-
-    def norm_lang(code: str) -> str:
-        if not code:
-            return "en"
-        b = code.split("-")[0].lower()
-        if b.startswith("cmn"):
-            b = "zh"
-        return b if b in ALLOWED else "en"
+ 
 
     # Default: use LiveKit's LangChain/LangGraph adapter backed by a LangChain Runnable.
     # Swap ChatOpenAI for a compiled LangGraph workflow when ready.
@@ -242,7 +228,7 @@ async def entrypoint(ctx: JobContext):
         tts=eleven_tts.TTS(
             api_key=ELEVEN_API_KEY,
             model="eleven_turbo_v2_5",
-            language="en",
+            # Using a single ElevenLabs voice for multilingual output
         ),
         vad=silero.VAD.load(),
         turn_detection=MultilingualModel(),
@@ -260,54 +246,10 @@ async def entrypoint(ctx: JobContext):
         print(f"[transcript] saved {path}")
     ctx.add_shutdown_callback(save_transcript)
 
-    # sticky switching
-    current_lang = "en"
-    last_switch = 0.0
-    SWITCH_COOLDOWN = 2.0
-    last_signals: deque[str] = deque(maxlen=2)
-
-    def maybe_switch(target: str, reason: str):
-        nonlocal current_lang, last_switch
-        target = norm_lang(target)
-        if target == current_lang:
-            return
-        now = time.time()
-        if now - last_switch < SWITCH_COOLDOWN:
-            return
-        # Switch language on the existing TTS engine (SDK 1.2.x has no set_tts)
-        session.tts.update_options(language=target)
-        current_lang = target
-        last_switch = now
-        print(f"[tts] switched -> {current_lang} ({reason}) voice_id={VOICE_MAP.get(current_lang) or 'default'}")
-
     @session.on("user_input_transcribed")
     def _on_user_transcribed(ev: UserInputTranscribedEvent):
+        # Log STT events; no language switching is performed
         print(f"[stt][final={ev.is_final}] {ev.language}: {ev.transcript}")
-        if not ev.is_final:
-            return
-
-        # compute a signal from content, not only STT tag
-        sig = strong_lang_signal(ev.transcript or "")
-        last_signals.append(sig)
-
-        # require two matching signals to switch, unless the user asked explicitly
-        explicit = sig in {"hi", "zh"} and sig != current_lang and (
-            ("hindi" in (ev.transcript or "").lower()) or
-            any(k in (ev.transcript or "") for k in ["हिंदी", "中文", "汉语", "Mandarin", "Chinese"])
-        )
-
-        if explicit:
-            maybe_switch(sig, "explicit")
-            return
-
-        if len(last_signals) == 2 and last_signals[0] == last_signals[1] and last_signals[0] != current_lang:
-            maybe_switch(last_signals[0], "stable-two-signals")
-            return
-
-        # As a fallback, honor STT language if very confident script wise
-        if ev.language and norm_lang(ev.language) != current_lang:
-            if sig in {"hi", "zh"}:
-                maybe_switch(sig, "stt+script")
 
     @session.on("conversation_item_added")
     def _on_item(ev: ConversationItemAddedEvent):
