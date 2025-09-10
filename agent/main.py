@@ -16,6 +16,16 @@ from livekit.plugins import deepgram, openai, silero
 from livekit.plugins.elevenlabs import tts as eleven_tts
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
+# Support running as a script (python agent/main.py) and as a module (python -m agent.main)
+try:
+    from .graph import run_graph  # type: ignore[import-not-found]
+except Exception:
+    import sys
+    PROJECT_ROOT = Path(__file__).resolve().parent.parent
+    if str(PROJECT_ROOT) not in sys.path:
+        sys.path.insert(0, str(PROJECT_ROOT))
+    from agent.graph import run_graph  # type: ignore[no-redef]
+
 load_dotenv()
 
 DATA_DIR = Path(__file__).resolve().parent / "data"
@@ -34,6 +44,22 @@ def _write_json(p: Path, obj: dict) -> None:
         json.dump(obj, f, indent=2, ensure_ascii=False)
 
 class KimberAssistant(Agent):
+    @function_tool()
+    async def orchestrate(self, context: RunContext, user_text: str, account_number: Optional[str] | None = None, proposed_address: Optional[str] | None = None, lang: Optional[str] | None = None) -> dict[str, Any]:
+        reply = await run_graph(
+            context,
+            user_text=user_text,
+            lang=lang or "en",
+            tools={
+                "verify_identity": self.verify_identity,
+                "get_plan_info": self.get_plan_info,
+                "update_address": self.update_address,
+                "request_transfer": self.request_transfer,
+            },
+            account_number=account_number,
+            proposed_address=proposed_address,
+        )
+        return {"reply": reply}
     @function_tool()
     async def verify_identity(self, context: RunContext, account_number: str) -> dict[str, Any]:
         norm = normalize_account_number(account_number)
@@ -160,6 +186,18 @@ async def entrypoint(ctx: JobContext):
             b = "zh"
         return b if b in ALLOWED else "en"
 
+    # Default: use LiveKit's LangChain/LangGraph adapter backed by a LangChain Runnable.
+    # Swap ChatOpenAI for a compiled LangGraph workflow when ready.
+    try:
+        from livekit.plugins import langchain as lk_langchain  # type: ignore
+        from langchain_openai import ChatOpenAI  # type: ignore
+        openai_model = os.getenv("OPENAI_MODEL") or "gpt-4o-mini"
+        chat_runnable = ChatOpenAI(model=openai_model, temperature=0.2)
+        llm_adapter = lk_langchain.LLMAdapter(runnable=chat_runnable)
+    except Exception as e:
+        print(f"[langgraph] Adapter unavailable, falling back to OpenAI LLM: {e}")
+        llm_adapter = openai.LLM(model="gpt-4o-mini")
+
     session = AgentSession(
         stt=deepgram.STT(
             api_key=os.getenv("DEEPGRAM_API_KEY"),
@@ -170,7 +208,7 @@ async def entrypoint(ctx: JobContext):
             smart_format=True,
             endpointing_ms=300,
         ),
-        llm=openai.LLM(model="gpt-4o-mini"),
+        llm=llm_adapter,
         tts=eleven_tts.TTS(
             api_key=ELEVEN_API_KEY,
             model="eleven_turbo_v2_5",
@@ -257,6 +295,8 @@ async def entrypoint(ctx: JobContext):
             "When speaking Chinese, use simplified Chinese. "
             "Do not repeat the caller. "
             "Ask for the account number to verify. Use tools when needed. "
+            "Always use the orchestrate tool to decide the next action and produce the final reply. "
+            "Do not call other tools directly; orchestrate will call them for you. "
             "After verification, help with plan expiry and profile info. "
             "Update address if asked. Transfer only if the caller asks for a human. "
             "Keep replies short."
@@ -267,7 +307,7 @@ async def entrypoint(ctx: JobContext):
 
     # force first greet to English
     await session.generate_reply(
-        instructions="Greet the caller in English and ask for their account number to verify. Keep it short."
+        instructions="Greet the caller in English and say thank you for calling Kimber Health, How may I help you today? you should alsways greet when you are connected to the caller. Then when the user also greet or asks anything, ask them their account number for verification. Keep it short."
     )
 
 if __name__ == "__main__":
