@@ -111,10 +111,40 @@ class KimberAssistant(Agent):
 # Accept inputs like:
 #   "K I m 4 0 0 4", "kim4004", "kIm-4004.", "My account is KIM4004"
 # Output canonical form: "KIM4004"
+NUM_WORDS_TO_DIGIT = {
+    "zero": "0",
+    "oh": "0",
+    "o": "0",
+    "one": "1",
+    "two": "2",
+    "three": "3",
+    "four": "4",
+    "five": "5",
+    "six": "6",
+    "seven": "7",
+    "eight": "8",
+    "nine": "9",
+}
+
+def _replace_number_words(text: str) -> str:
+    # Convert standalone number words to digits (e.g., "four zero zero four" -> "4004")
+    # Keep separators so we don't glue unrelated words together
+    parts = re.split(r"(\W+)", text)
+    out: list[str] = []
+    for tok in parts:
+        low = tok.lower()
+        if low.isalpha() and low in NUM_WORDS_TO_DIGIT:
+            out.append(NUM_WORDS_TO_DIGIT[low])
+        else:
+            out.append(tok)
+    return "".join(out)
+
 def normalize_account_number(raw: str | None) -> str:
     if not raw:
         return ""
-    s = raw.strip().upper()
+    # First, map spelled-out digit words to digits before stripping
+    replaced = _replace_number_words(raw.strip())
+    s = replaced.upper()
     # keep only letters and digits
     s = "".join(ch for ch in s if ch.isalnum())
     # collapse repeated KIM and digits
